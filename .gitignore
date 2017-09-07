@@ -1,3 +1,4 @@
 config.php
 .idea
 /twilio-php-master
+/output.log
