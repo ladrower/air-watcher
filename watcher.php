@@ -22,16 +22,15 @@ function get_node_data () {
     return json_decode(file_get_contents(NODE_API));
 }
 
-function send_notification ($to, $message) {
-    $sid = TWILIO_SID;
-    $token = TWILIO_TOKEN;
-    $client = new Client($sid, $token);
+function send_notification ($to, $message, $valid = 600) {
+    $client = new Client(TWILIO_SID, TWILIO_TOKEN);
 
     $client->messages->create(
         $to,
         array(
             'from' => FROM,
-            'body' => $message
+            'body' => $message,
+            'validityPeriod' => $valid
         )
     );
 }
@@ -98,6 +97,7 @@ function run () {
             $message = $dt->format('d M H:i') . "\r\n" . $message;
             send_notification(ARTEM, $message);
             send_notification(ALINA, $message);
+            echo $message . "\r\n";
         }
 
         if (!$running) {
