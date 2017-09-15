@@ -16,23 +16,46 @@ define('PM25', 'p2');
 define('TEMPERATURE', 'tp');
 define('HUMIDITY', 'hm');
 
-$running = true;
-
-function get_node_data () {
-    return json_decode(file_get_contents(NODE_API));
+abstract class Timing {
+    const FIVE_MINUTES = 300;
+    const TEN_MINUTES = 600;
+    const ONE_HOUR = 3600;
 }
 
-function send_notification ($to, $message, $valid = 600) {
-    $client = new Client(TWILIO_SID, TWILIO_TOKEN);
+class NotificationException extends Exception {}
+class NodeAvailabilityException extends Exception {}
 
-    $client->messages->create(
-        $to,
-        array(
-            'from' => FROM,
-            'body' => $message,
-            'validityPeriod' => $valid
-        )
-    );
+$running = true;
+
+function logme ($var) {
+    echo date('r') . ":\r\n";
+    echo is_string($var) ? $var : print_r($var, true);
+    echo "\r\n";
+}
+
+function get_node_data () {
+    $response = file_get_contents(NODE_API);
+    if ($response === false) {
+        throw new \Exception("Cannot access Node API");
+    }
+    return json_decode($response);
+}
+
+function send_notification ($to, $message, $valid = Timing::TEN_MINUTES) {
+    try {
+        $client = new Client(TWILIO_SID, TWILIO_TOKEN);
+
+        $client->messages->create(
+            $to,
+            array(
+                'from' => FROM,
+                'body' => $message,
+                'validityPeriod' => $valid
+            )
+        );
+    } catch (\Exception $exception) {
+        throw new NotificationException('Error sending notification', 0, $exception);
+    }
 }
 
 function analyze ($data, $key, $last_results, $last_failures, $lower_limit, $upper_limit, $lower_offset, $upper_offset, $name, $units, &$message) {
@@ -57,7 +80,7 @@ function analyze ($data, $key, $last_results, $last_failures, $lower_limit, $upp
         if (!$last_result) {
             $message .= "{$name} is OK (" . (int)$value . "{$units})\r\n";
         }
-    } else if ($last_result || time() - $last_failures->$key > 3600) {
+    } else if ($last_result || time() - $last_failures->$key > Timing::ONE_HOUR) {
         $last_failures->$key = time();
         $message .= "{$name} is {$log} (" . (int)$value . "{$units})\r\n";
     }
@@ -67,6 +90,8 @@ function analyze ($data, $key, $last_results, $last_failures, $lower_limit, $upp
 
 function run () {
     global $running;
+
+    $nodeUnavailabilityCount = 0;
 
     $last_results = (object) array(
         CO2 => true,
@@ -79,10 +104,26 @@ function run () {
 
     while (true) {
         $message = '';
-        $data = get_node_data();
+        $data = null;
 
-        if (time() - strtotime($data->current->ts) > 60 * 15) {
-            sleep(300);
+        try {
+            $data = get_node_data();
+            $nodeUnavailabilityCount = 0;
+        } catch (\Exception $exception) {
+            $singleSleep = Timing::FIVE_MINUTES;
+            $maxAttempts = 48;
+            $nodeUnavailabilityCount++;
+            if ($nodeUnavailabilityCount > $maxAttempts) {
+                throw new NodeAvailabilityException(
+                    'Node unavailable more than ' . $singleSleep * $maxAttempts / Timing::ONE_HOUR  . ' hours', 0, $exception);
+            }
+            logme($exception->getMessage());
+            sleep($singleSleep);
+            continue;
+        }
+
+        if (time() - strtotime($data->current->ts) > 3 * Timing::FIVE_MINUTES) {
+            sleep(Timing::FIVE_MINUTES);
             continue;
         }
 
@@ -97,38 +138,46 @@ function run () {
             $message = $dt->format('d M H:i') . "\r\n" . $message;
             send_notification(ARTEM, $message);
             send_notification(ALINA, $message);
-            echo $message . "\r\n";
+            logme($message);
         }
 
         if (!$running) {
-            send_notification(ARTEM, "Service is back online");
-            echo "Back online" . date('r') . ".\r\n";
+            send_notification(ARTEM, 'Service is back online');
+            logme('Back online');
             $running = true;
         }
-        sleep(600);
+        sleep(Timing::TEN_MINUTES);
     }
 }
 
 function start () {
     global $running;
+
     try {
         run();
-    } catch (\Exception $exception) {
-        echo "Script failed " . date('r') . ".\r\n";
-        var_dump($exception);
-        sleep(300);
+    }
+    catch (NotificationException $notificationException) {
+        logme($notificationException->getMessage());
+    }
+    catch (NodeAvailabilityException $nodeAvailabilityException) {
+        logme($nodeAvailabilityException->getMessage());
+    }
+    catch (\Exception $exception) {
+        logme('Something went wrong ' . print_r($exception, true));
+
         try {
             if ($running) {
-                send_notification(ARTEM, "Script failed");
+                send_notification(ARTEM, substr($exception->getMessage(), 0, 160));
             }
         } catch (\Exception $e) {
-            echo "Cannot send failure notification. Going to sleep for 1 hour.\r\n";
-            sleep(3600);
+            logme('Cannot send notification');
         }
-        $running = false;
-        echo "Restarting" . date('r') . ".\r\n";
-        start();
     }
+
+    $running = false;
+    sleep(Timing::ONE_HOUR);
+    logme('Restarting');
+    return start();
 }
 
 start();
