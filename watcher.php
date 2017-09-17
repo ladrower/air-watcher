@@ -27,10 +27,35 @@ class NodeAvailabilityException extends Exception {}
 
 $running = true;
 
-function logme ($var) {
+function logMe ($var) {
     echo date('r') . ":\r\n";
     echo is_string($var) ? $var : print_r($var, true);
     echo "\r\n";
+}
+
+function interpolateLinear ($value, $fromRange, $toRange) {
+    $percent = ($value - $fromRange[0]) / ($fromRange[1] - $fromRange[0]);
+    return $toRange[0] + ($toRange[1] - $toRange[0]) * $percent;
+}
+
+function pm25ToAqi ($value) {
+    if ($value <= 12) {
+        return (int) interpolateLinear ($value, [0,12], [0,50]);
+    } else if ($value <= 35.4) {
+        return (int) interpolateLinear ($value, [12.1,35.4], [51,100]);
+    } else if ($value <= 55.4) {
+        return (int)interpolateLinear ($value, [35.5,55.4], [101,150]);
+    } else if ($value <= 150.4) {
+        return (int) interpolateLinear ($value, [55.4,150.4], [151,200]);
+    } else if ($value <= 250.4) {
+        return (int) interpolateLinear ($value, [150.5,250.4], [201,300]);
+    } else if ($value <= 350.4) {
+        return (int) interpolateLinear ($value, [250.5,350.4], [301,400]);
+    } else if ($value <= 500) {
+        return (int) interpolateLinear ($value, [350.5,500], [401,500]);
+    }
+
+    throw new \Exception("Value out of range");
 }
 
 function get_node_data () {
@@ -58,10 +83,23 @@ function send_notification ($to, $message, $valid = Timing::TEN_MINUTES) {
     }
 }
 
-function analyze ($data, $key, $last_results, $last_failures, $lower_limit, $upper_limit, $lower_offset, $upper_offset, $name, $units, &$message) {
+function analyze (
+        $data,
+        $key,
+        $last_results,
+        $last_failures,
+        $lower_limit,
+        $upper_limit,
+        $lower_offset,
+        $upper_offset,
+        $name,
+        $formatter,
+        &$message
+) {
     $value = $data->current->$key;
     $last_result = $last_results->$key;
-    $log = '';
+    $level = '';
+    $restoring = false;
 
     if ($last_result) {
         $lower_offset = 0;
@@ -70,20 +108,32 @@ function analyze ($data, $key, $last_results, $last_failures, $lower_limit, $upp
 
     $result = false;
     if ($value < $lower_limit + $lower_offset) {
-        $log = 'TOO LOW';
+        $level = 'LOW';
+        $restoring = $value > $lower_limit;
     } else if ($value > $upper_limit - $upper_offset) {
-        $log = 'TOO HIGH';
+        $level = 'HIGH';
+        $restoring = $value < $upper_limit;
     } else {
         $result = true;
     }
+
+
     if ($result) {
         if (!$last_result) {
-            $message .= "{$name} is OK (" . (int)$value . "{$units})\r\n";
+            $message .= "{$name} is OK";
         }
-    } else if ($last_result || time() - $last_failures->$key > Timing::ONE_HOUR) {
+    } else if ($last_result) {
         $last_failures->$key = time();
-        $message .= "{$name} is {$log} (" . (int)$value . "{$units})\r\n";
+        $message .= "{$name} is TOO {$level}";
+    } else if (time() - $last_failures->$key > 4 * Timing::ONE_HOUR) {
+        $last_failures->$key = time();
+        $message .= "{$name} is still " . ($restoring ? 'QUITE' : 'TOO')  . " {$level}";
     }
+
+    if ($message !== '') {
+        $message .= ' (' . $formatter($value) . ")\r\n";
+    }
+
     $last_results->$key = $result;
     return $result;
 }
@@ -117,7 +167,7 @@ function run () {
                 throw new NodeAvailabilityException(
                     'Node unavailable more than ' . $singleSleep * $maxAttempts / Timing::ONE_HOUR  . ' hours', 0, $exception);
             }
-            logme($exception->getMessage());
+            logMe($exception->getMessage());
             sleep($singleSleep);
             continue;
         }
@@ -127,10 +177,18 @@ function run () {
             continue;
         }
 
-        analyze($data, PM25, $last_results, $last_failures, 0, 30, 0, 15, 'PM2.5', 'µg/m3', $message);
-        analyze($data, CO2, $last_results, $last_failures, 0, 1000, 0, 300, 'CO2', 'ppm', $message);
-        analyze($data, HUMIDITY, $last_results, $last_failures, 30, 70, 10, 10, 'Humidity', '%', $message);
-        analyze($data, TEMPERATURE, $last_results, $last_failures, 15, 25, 3, 1, 'Temperature', '°', $message);
+        analyze($data, PM25, $last_results, $last_failures, 0, 35.5, 0, 23.4, 'PM2.5', function ($v) {
+            return pm25ToAqi($v) . ' | '. round($v, 1) . 'µg/m3';
+        }, $message);
+        analyze($data, CO2, $last_results, $last_failures, 0, 1200, 0, 400, 'CO2', function ($v) {
+            return (int) $v . 'ppm';
+        }, $message);
+        analyze($data, HUMIDITY, $last_results, $last_failures, 30, 70, 10, 10, 'Humidity', function ($v) {
+            return (int) $v . '%';
+        }, $message);
+        analyze($data, TEMPERATURE, $last_results, $last_failures, 16, 26, 2, 2, 'Temperature', function ($v) {
+            return (int) $v . '°';
+        }, $message);
 
         if ($message !== '') {
             $dt = new DateTime($data->current->ts);
@@ -138,12 +196,12 @@ function run () {
             $message = $dt->format('d M H:i') . "\r\n" . $message;
             send_notification(ARTEM, $message);
             send_notification(ALINA, $message);
-            logme($message);
+            logMe($message);
         }
 
         if (!$running) {
             send_notification(ARTEM, 'Service is back online');
-            logme('Back online');
+            logMe('Back online');
             $running = true;
         }
         sleep(Timing::TEN_MINUTES);
@@ -157,26 +215,26 @@ function start () {
         run();
     }
     catch (NotificationException $notificationException) {
-        logme($notificationException->getMessage());
+        logMe($notificationException->getMessage());
     }
     catch (NodeAvailabilityException $nodeAvailabilityException) {
-        logme($nodeAvailabilityException->getMessage());
+        logMe($nodeAvailabilityException->getMessage());
     }
     catch (\Exception $exception) {
-        logme('Something went wrong ' . print_r($exception, true));
+        logMe('Something went wrong ' . print_r($exception, true));
 
         try {
             if ($running) {
                 send_notification(ARTEM, substr($exception->getMessage(), 0, 160));
             }
         } catch (\Exception $e) {
-            logme('Cannot send notification');
+            logMe('Cannot send notification');
         }
     }
 
     $running = false;
     sleep(Timing::ONE_HOUR);
-    logme('Restarting');
+    logMe('Restarting');
     return start();
 }
 
