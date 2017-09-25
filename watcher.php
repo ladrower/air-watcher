@@ -63,7 +63,12 @@ function get_node_data () {
     if ($response === false) {
         throw new \Exception("Cannot access Node API");
     }
-    return json_decode($response);
+    $data = json_decode($response);
+    if (!is_object($data) || !isset($data->current)) {
+        throw new \Exception("Invalid Node data");
+    }
+    
+    return $data->current;
 }
 
 function send_notification ($to, $message, $valid = Timing::TEN_MINUTES) {
@@ -93,12 +98,12 @@ function analyze (
         $lower_offset,
         $upper_offset,
         $name,
-        $formatter,
-        &$message
+        $formatter
 ) {
-    $value = $data->current->$key;
+    $value = $data->$key;
     $last_result = $last_results->$key;
     $level = '';
+    $message = '';
     $restoring = false;
 
     if ($last_result) {
@@ -135,7 +140,7 @@ function analyze (
     }
 
     $last_results->$key = $result;
-    return $result;
+    return $message;
 }
 
 function run () {
@@ -172,26 +177,26 @@ function run () {
             continue;
         }
 
-        if (time() - strtotime($data->current->ts) > 3 * Timing::FIVE_MINUTES) {
+        if (time() - strtotime($data->ts) > 3 * Timing::FIVE_MINUTES) {
             sleep(Timing::FIVE_MINUTES);
             continue;
         }
-
-        analyze($data, PM25, $last_results, $last_failures, 0, 35.5, 0, 23.4, 'PM2.5', function ($v) {
+        
+        $message .= analyze($data, PM25, $last_results, $last_failures, 0, 35.5, 0, 23.4, 'PM2.5', function ($v) {
             return pm25ToAqi($v) . ' | '. round($v, 1) . 'µg/m3';
-        }, $message);
-        analyze($data, CO2, $last_results, $last_failures, 0, 1200, 0, 400, 'CO2', function ($v) {
+        });
+        $message .= analyze($data, CO2, $last_results, $last_failures, 0, 1200, 0, 400, 'CO2', function ($v) {
             return (int) $v . 'ppm';
-        }, $message);
-        analyze($data, HUMIDITY, $last_results, $last_failures, 30, 70, 10, 10, 'Humidity', function ($v) {
+        });
+        $message .= analyze($data, HUMIDITY, $last_results, $last_failures, 30, 70, 10, 10, 'Humidity', function ($v) {
             return (int) $v . '%';
-        }, $message);
-        analyze($data, TEMPERATURE, $last_results, $last_failures, 16, 26, 2, 2, 'Temperature', function ($v) {
+        });
+        $message .= analyze($data, TEMPERATURE, $last_results, $last_failures, 16, 26, 2, 2, 'Temperature', function ($v) {
             return (int) $v . '°';
-        }, $message);
+        });
 
         if ($message !== '') {
-            $dt = new DateTime($data->current->ts);
+            $dt = new DateTime($data->ts);
             $dt->setTimezone(new DateTimeZone(TIMEZONE));
             $message = $dt->format('d M H:i') . "\r\n" . $message;
             send_notification(ARTEM, $message);
