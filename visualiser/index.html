@@ -20,13 +20,33 @@
         overflow: hidden;
         pointer-events: none;
     }
+    #controls {
+        width: 15%;
+        height: 38px;
+        pointer-events: auto;
+        position: absolute;
+        top: 3px;
+        right: 0;
+        padding: 2px 15px;
+        background-color: #eeeeee;
+        text-align: right;
+    }
+    #current-time {
+        position: absolute;
+        top: 5px;
+        right: 15%;
+        font-size: 25px;
+        line-height: 20px;
+        padding: 2px 15px;
+    }
     #node {
         padding-top: 15px;
         padding-bottom: 100px;
     }
     #node .header {
         color: #fff;
-        font-size: 30px;
+        font-size: 25px;
+        line-height: 20px;
     }
     #node .badge {
         font-size: 30px;
@@ -36,22 +56,35 @@
     }
 </style>
 
+<div id="controls">
+    <button class="btn btn-primary refresh">
+        <span class="glyphicon glyphicon-refresh"></span>
+    </button>
+</div>
+<span id="current-time" class="glyphicon glyphicon-time">--:--</span>
 <iframe id="aqicn" width="100%"></iframe>
 <div id="node">
-    <span class="header">В квартире:</span>
-    <span class="time glyphicon glyphicon-time">--:--</span>
-    <button class="btn btn-lg p2">
-        PM2.5 <span class="badge"></span>
-    </button>
-    <button class="btn btn-lg co">
-        CO2 <span class="badge"></span>
-    </button>
-    <button class="btn btn-lg tp">
-        Температура <span class="badge"></span>
-    </button>
-    <button class="btn btn-lg hm">
-        Влажность <span class="badge"></span>
-    </button>
+    <div class="row">
+        <div class="col-md-2">
+            <span class="header">В квартире</span>
+            <br>
+            <span class="header">во время</span> <span class="time glyphicon glyphicon-time">--:--</span>
+        </div>
+        <div class="col-md-10">
+            <button class="btn btn-lg p2">
+                PM2.5 <span class="badge"></span>
+            </button>
+            <button class="btn btn-lg co">
+                CO2 <span class="badge"></span>
+            </button>
+            <button class="btn btn-lg tp">
+                Температура <span class="badge"></span>
+            </button>
+            <button class="btn btn-lg hm">
+                Влажность <span class="badge"></span>
+            </button>
+        </div>
+    </div>
 </div>
 
 <script src="//code.jquery.com/jquery-1.10.2.js"></script>
@@ -68,9 +101,14 @@
         loadNodeData();
     }, MINUTE * 10);
 
+    setInterval(function () {
+        updateTime();
+    }, 1000);
+
     aqicnFrame.onload = adjustAqicnFrame;
     loadAqicnData();
     loadNodeData();
+    updateTime();
 
     addEventListener("click", function() {
         var el = document.documentElement,
@@ -82,6 +120,16 @@
 
         rfs.call(el);
     });
+
+    $('#controls .refresh').on('click', function (e) {
+        loadAqicnData();
+        loadNodeData();
+        e.stopPropagation();
+    });
+
+    function updateTime() {
+        $('#current-time').text(timeFormatted(new Date()));
+    }
 
     function adjustAqicnFrame() {
         aqicnFrame.width = window.innerWidth;
@@ -108,7 +156,7 @@
             updateNodeItem('co', data, [100, 1200], [200, 800], 'ppm', function (value) {
                 return Math.round(value);
             });
-            $('#node .time').text(('0' + time.getHours()).slice(-2) + ':' + ('0' + time.getMinutes()).slice(-2));
+            $('#node .time').text(timeFormatted(time));
         });
     }
 
@@ -129,6 +177,10 @@
             btn.addClass('btn-success');
         }
         btn.find('.badge').text((formatter ? formatter(value) : value) + units);
+    }
+
+    function timeFormatted(time) {
+        return ('0' + time.getHours()).slice(-2) + ':' + ('0' + time.getMinutes()).slice(-2)
     }
 
     function interpolateLinear (value, fromRange, toRange) {
