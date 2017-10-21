@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AIR QUALITY</title>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+</head>
+<body>
+<style>
+    body {
+        padding: 0;
+        margin: 0;
+        overflow: hidden;
+        background-color: black;
+        pointer-events: none;
+    }
+    #aqicn {
+        padding: 0;
+        margin: 0;
+        overflow: hidden;
+        pointer-events: none;
+    }
+    #node {
+        padding-top: 15px;
+        padding-bottom: 100px;
+    }
+    #node .header {
+        color: #fff;
+        font-size: 30px;
+    }
+    #node .badge {
+        font-size: 30px;
+    }
+    #node .glyphicon {
+        color: white;
+    }
+</style>
+
+<iframe id="aqicn" width="100%"></iframe>
+<div id="node">
+    <span class="header">В квартире:</span>
+    <span class="time glyphicon glyphicon-time">--:--</span>
+    <button class="btn btn-lg p2">
+        PM2.5 <span class="badge"></span>
+    </button>
+    <button class="btn btn-lg co">
+        CO2 <span class="badge"></span>
+    </button>
+    <button class="btn btn-lg tp">
+        Температура <span class="badge"></span>
+    </button>
+    <button class="btn btn-lg hm">
+        Влажность <span class="badge"></span>
+    </button>
+</div>
+
+<script src="//code.jquery.com/jquery-1.10.2.js"></script>
+<script>
+    var MINUTE = 1000 * 60;
+    var NODE_API = 'https://www.airvisual.com/api/v2/node/X7mPQk5NKJ8SuBzuL';
+    var aqicnFrame = document.getElementById('aqicn');
+    var aqicnSrc = 'http://aqicn.org/city/poland/lublin/lublin-ul.obywatelska/ru/m/';
+    setInterval(function () {
+        loadAqicnData();
+    }, MINUTE * 30);
+
+    setInterval(function () {
+        loadNodeData();
+    }, MINUTE * 10);
+
+    aqicnFrame.onload = adjustAqicnFrame;
+    loadAqicnData();
+    loadNodeData();
+
+    addEventListener("click", function() {
+        var el = document.documentElement,
+            rfs = el.requestFullscreen
+                || el.webkitRequestFullScreen
+                || el.mozRequestFullScreen
+                || el.msRequestFullscreen
+            ;
+
+        rfs.call(el);
+    });
+
+    function adjustAqicnFrame() {
+        aqicnFrame.width = window.innerWidth;
+        aqicnFrame.height = window.innerHeight - 100;
+    }
+
+    function loadAqicnData () {
+        aqicnFrame.src = aqicnSrc;
+    }
+
+    function loadNodeData() {
+        $.getJSON(NODE_API, function( response ) {
+            var data = response.current;
+            var time = new Date(data.ts);
+            updateNodeItem('p2', data, [0, 35.5], [0, 12], '', function (value) {
+                return value + 'µg/m3' + ' (' + pm25ToAqi(value) + ')';
+            });
+            updateNodeItem('tp', data, [17, 24], [18.5, 22.5], '°C', function (value) {
+                return value.toFixed(1);
+            });
+            updateNodeItem('hm', data, [35, 65], [40, 60], '%', function (value) {
+                return Math.round(value);
+            });
+            updateNodeItem('co', data, [100, 1200], [200, 800], 'ppm', function (value) {
+                return Math.round(value);
+            });
+            $('#node .time').text(('0' + time.getHours()).slice(-2) + ':' + ('0' + time.getMinutes()).slice(-2));
+        });
+    }
+
+    function updateNodeItem(key, data, dangerLimits, warningLimits, units, formatter) {
+        var value = data[key];
+        var btn = $('#node .' + key);
+        if (value < dangerLimits[0] || value > dangerLimits[1]) {
+            btn.removeClass('btn-success');
+            btn.removeClass('btn-warning');
+            btn.addClass('btn-danger');
+        } else if (value < warningLimits[0] || value > warningLimits[1]) {
+            btn.removeClass('btn-success');
+            btn.removeClass('btn-danger');
+            btn.addClass('btn-warning');
+        } else {
+            btn.removeClass('btn-warning');
+            btn.removeClass('btn-danger');
+            btn.addClass('btn-success');
+        }
+        btn.find('.badge').text((formatter ? formatter(value) : value) + units);
+    }
+
+    function interpolateLinear (value, fromRange, toRange) {
+        var percent = (value - fromRange[0]) / (fromRange[1] - fromRange[0]);
+        return toRange[0] + (toRange[1] - toRange[0]) * percent;
+    }
+
+    function pm25ToAqi (value) {
+        if (value <= 12) {
+            return interpolateLinear (value, [0,12], [0,50]) | 0;
+        } else if (value <= 35.4) {
+            return interpolateLinear (value, [12.1,35.4], [51,100]) | 0;
+        } else if (value <= 55.4) {
+            return interpolateLinear (value, [35.5,55.4], [101,150]) | 0;
+        } else if (value <= 150.4) {
+            return interpolateLinear (value, [55.4,150.4], [151,200]) | 0;
+        } else if (value <= 250.4) {
+            return interpolateLinear (value, [150.5,250.4], [201,300]) | 0;
+        } else if (value <= 350.4) {
+            return interpolateLinear (value, [250.5,350.4], [301,400]) | 0;
+        } else if (value <= 500) {
+            return interpolateLinear (value, [350.5,500], [401,500]) | 0;
+        }
+        throw new Error("Value out of range");
+    }
+
+</script>
+</body>
+</html>
