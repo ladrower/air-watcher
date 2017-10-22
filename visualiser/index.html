@@ -20,24 +20,37 @@
         overflow: hidden;
         pointer-events: none;
     }
+    #aqicn-map {
+        padding: 0;
+        margin: 0;
+        overflow: hidden;
+        pointer-events: auto;
+    }
     #controls {
-        width: 15%;
+        width: 60%;
         height: 38px;
         pointer-events: auto;
         position: absolute;
-        top: 3px;
-        right: 0;
+        top: 1px;
+        left: 40%;
         padding: 2px 15px;
         background-color: #eeeeee;
-        text-align: right;
+        text-align: left;
+        z-index: 999;
+    }
+    #controls.windy {
+        width: auto;
+    }
+    #controls .btn {
+        margin-right: 10px;
     }
     #current-time {
-        position: absolute;
+        position: relative;
         top: 5px;
-        right: 15%;
+        left: 0;
         font-size: 25px;
-        line-height: 20px;
-        padding: 2px 15px;
+        line-height: 25px;
+        padding: 0 15px 0 0;
     }
     #node {
         padding-top: 15px;
@@ -54,15 +67,41 @@
     #node .glyphicon {
         color: white;
     }
+    #wyndy-map {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        pointer-events: auto;
+        z-index: 100;
+    }
 </style>
 
 <div id="controls">
-    <button class="btn btn-primary refresh">
+    <div class="pull-left">
+        <span>Текущее время: </span><span id="current-time">--:--</span>
+    </div>
+
+    <button class="btn btn-info step-backward pull-left">
+        <span class="glyphicon glyphicon-step-backward"></span>
+    </button>
+    <button class="btn btn-primary pause pull-left">
+        <span class="glyphicon glyphicon-pause"></span>
+    </button>
+    <button class="btn btn-primary play pull-left">
+        <span class="glyphicon glyphicon-play"></span>
+    </button>
+    <button class="btn btn-info step-forward pull-left">
+        <span class="glyphicon glyphicon-step-forward"></span>
+    </button>
+
+    <button class="btn btn-success refresh pull-right">
         <span class="glyphicon glyphicon-refresh"></span>
     </button>
 </div>
-<span id="current-time" class="glyphicon glyphicon-time">--:--</span>
-<iframe id="aqicn" width="100%"></iframe>
+<iframe id="aqicn" frameborder="0" width="100%"></iframe>
+<iframe id="aqicn-map" frameborder="0" width="100%"></iframe>
+<iframe id="wyndy-map" frameborder="0" width="100%"></iframe>
 <div id="node">
     <div class="row">
         <div class="col-md-2">
@@ -89,55 +128,264 @@
 
 <script src="//code.jquery.com/jquery-1.10.2.js"></script>
 <script>
-    var MINUTE = 1000 * 60;
+(function () {
+    var SECOND = 1000;
+    var MINUTE = SECOND * 60;
     var NODE_API = 'https://www.airvisual.com/api/v2/node/X7mPQk5NKJ8SuBzuL';
-    var aqicnFrame = document.getElementById('aqicn');
     var aqicnSrc = 'http://aqicn.org/city/poland/lublin/lublin-ul.obywatelska/ru/m/';
-    setInterval(function () {
-        loadAqicnData();
-    }, MINUTE * 30);
+    var aqicnMapSrc = 'http://aqicn.org/map/world/ru/m/';
+    var windySrc = 'https://embed.windy.com/embed2.html?lat=52.107&lon=15.381&zoom=6&level=surface&overlay=wind&menu=&message=&marker=&forecast=12&calendar=now&location=coordinates&type=map&actualGrid=&metricWind=km%2Fh&metricTemp=%C2%B0C';
+    var $aqicn = $('#aqicn');
+    var $aqicnMap = $('#aqicn-map');
+    var $windy = $('#wyndy-map');
+    var $controls = $('#controls');
+    var $node = $('#node');
+    var $nodeTime = $node.find('.time');
+    var $currentTime = $('#current-time');
+    var el = document.documentElement,
+        rfs = el.requestFullscreen
+            || el.webkitRequestFullScreen
+            || el.mozRequestFullScreen
+            || el.msRequestFullscreen,
+        isFs = function () {
+            return el.fullscreenElement
+                || el.webkitFullscreenElement
+                || el.mozFullScreenElement
+                || el.msFullscreenElement
+        };
+    var DISPLAY = {
+        AIR_QUALITY: 0,
+        WINDY_MAP: 1,
+        AIR_QUALITY_MAP: 2
+    };
+    var currentDisplay = 0;
+    var displays = [DISPLAY.AIR_QUALITY, DISPLAY.WINDY_MAP, DISPLAY.AIR_QUALITY_MAP];
+    var slideTimer = null;
+    var aqicnTimer = null;
+    var aqicnMapTimer = null;
+    var windyTimer = null;
+    var aqicnMapObsolete = false;
 
-    setInterval(function () {
-        loadNodeData();
-    }, MINUTE * 10);
+    return (function setupTimers() {
+        setupAqicnTimer();
+        setupAqicnMapTimer();
+        setupWindyTimer();
 
-    setInterval(function () {
+        setInterval(function () {
+            loadNodeData();
+        }, MINUTE * 10);
+
+        setInterval(function () {
+            updateTime();
+        }, SECOND);
+
+        setupSlider();
+    })(), (function addDomEvents () {
+        $aqicn[0].onload = adjustAqicnFrame;
+        $windy[0].onload = adjustWindyFrame;
+        $aqicnMap[0].onload = adjustAqicnMapFrame;
+        addEventListener('click', function() {
+            if (!isFs() && rfs) {
+                rfs.call(el);
+            }
+        });
+        $(document).on('webkitfullscreenchange mozfullscreenchange fullscreenchange', function () {
+            loadAll();
+        });
+        $controls.find('.refresh').on('click', function (e) {
+            loadAll();
+            e.stopPropagation();
+        });
+        $controls.find('.pause').on('click', function (e) {
+            $(this).hide();
+            $controls.find('.play').show();
+            pauseSlider();
+            e.stopPropagation();
+        });
+        $controls.find('.play').on('click', function (e) {
+            $(this).hide();
+            $controls.find('.pause').show();
+            runSlider();
+            e.stopPropagation();
+        });
+        $controls.find('.step-forward').on('click', function (e) {
+            nextSlide();
+            resetRefreshTimer();
+            if (slideTimer) {
+                pauseSlider();
+                runSlider();
+            }
+            e.stopPropagation();
+        });
+        $controls.find('.step-backward').on('click', function (e) {
+            prevSlide();
+            resetRefreshTimer();
+            if (slideTimer) {
+                pauseSlider();
+                runSlider();
+            }
+            e.stopPropagation();
+        });
+    })(), (function init () {
+        $controls.find('.play').hide();
+        loadAll();
+        aqicnMapObsolete = true;
         updateTime();
-    }, 1000);
+    })();
 
-    aqicnFrame.onload = adjustAqicnFrame;
-    loadAqicnData();
-    loadNodeData();
-    updateTime();
-
-    addEventListener("click", function() {
-        var el = document.documentElement,
-            rfs = el.requestFullscreen
-                || el.webkitRequestFullScreen
-                || el.mozRequestFullScreen
-                || el.msRequestFullscreen
-            ;
-
-        rfs.call(el);
-    });
-
-    $('#controls .refresh').on('click', function (e) {
+    function loadAll () {
         loadAqicnData();
+        loadAqicnMapData();
         loadNodeData();
-        e.stopPropagation();
-    });
+        loadWindyData();
+    }
 
     function updateTime() {
-        $('#current-time').text(timeFormatted(new Date()));
+        $currentTime.text(timeFormatted(new Date(), true));
+    }
+
+    function setupSlider () {
+        pauseSlider();
+        currentDisplay = displays[0];
+        showCurrentDisplay();
+        runSlider()
+    }
+
+    function runSlider() {
+        slideTimer = setInterval(function slide () {
+            nextSlide()
+        }, SECOND * 20);
+    }
+
+    function pauseSlider() {
+        if (slideTimer) {
+            clearInterval(slideTimer);
+            slideTimer = null;
+        }
+    }
+
+    function nextSlide () {
+        var index = displays.indexOf(currentDisplay);
+        if (index < displays.length - 1) {
+            index++;
+        } else {
+            index = 0;
+        }
+        currentDisplay = displays[index];
+        showCurrentDisplay();
+    }
+
+    function prevSlide () {
+        var index = displays.indexOf(currentDisplay);
+        if (index === 0) {
+            index = displays.length - 1;
+        } else {
+            index--;
+        }
+        currentDisplay = displays[index];
+        showCurrentDisplay();
+    }
+
+    function setupAqicnTimer () {
+        if (aqicnTimer) {
+            clearInterval(aqicnTimer);
+        }
+        aqicnTimer = setInterval(function () {
+            loadAqicnData();
+        }, MINUTE * 30);
+    }
+
+    function setupAqicnMapTimer () {
+        if (aqicnMapTimer) {
+            clearInterval(aqicnMapTimer);
+        }
+        aqicnMapTimer = setInterval(function () {
+            aqicnMapObsolete = true;
+        }, MINUTE * 60);
+    }
+
+    function setupWindyTimer () {
+        if (windyTimer) {
+            clearInterval(windyTimer);
+        }
+        windyTimer = setInterval(function () {
+            loadWindyData();
+        }, MINUTE * 30);
+    }
+
+    function resetRefreshTimer () {
+        switch (currentDisplay) {
+            case DISPLAY.AIR_QUALITY:
+                setupAqicnTimer();
+                break;
+            case DISPLAY.WINDY_MAP:
+                setupWindyTimer();
+                break;
+            case DISPLAY.AIR_QUALITY_MAP:
+                setupAqicnMapTimer();
+                break;
+        }
+    }
+
+    function showCurrentDisplay() {
+        switch (currentDisplay) {
+            case DISPLAY.AIR_QUALITY:
+                $node.show();
+                $aqicn.show();
+                $aqicnMap.hide();
+                $windy.hide();
+                $controls.removeClass('windy');
+                adjustAqicnFrame();
+                break;
+            case DISPLAY.WINDY_MAP:
+                $node.hide();
+                $aqicn.hide();
+                $aqicnMap.hide();
+                $windy.show();
+                $controls.addClass('windy');
+                adjustWindyFrame();
+                break;
+            case DISPLAY.AIR_QUALITY_MAP:
+                $node.show();
+                $aqicn.hide();
+                $aqicnMap.show();
+                $windy.hide();
+                $controls.removeClass('windy');
+                if (aqicnMapObsolete) {
+                    loadAqicnMapData();
+                    aqicnMapObsolete = false;
+                } else {
+                    adjustAqicnMapFrame();
+                }
+                break;
+        }
+    }
+
+    function adjustWindyFrame() {
+        $windy.width(window.innerWidth);
+        $windy.height(window.innerHeight);
     }
 
     function adjustAqicnFrame() {
-        aqicnFrame.width = window.innerWidth;
-        aqicnFrame.height = window.innerHeight - 100;
+        $aqicn.width(window.innerWidth);
+        $aqicn.height(window.innerHeight - 100);
+    }
+
+    function adjustAqicnMapFrame() {
+        $aqicnMap.width(window.innerWidth);
+        $aqicnMap.height(window.innerHeight - 100);
     }
 
     function loadAqicnData () {
-        aqicnFrame.src = aqicnSrc;
+        $aqicn[0].src = aqicnSrc;
+    }
+
+    function loadAqicnMapData () {
+        $aqicnMap[0].src = aqicnMapSrc;
+    }
+
+    function loadWindyData () {
+        $windy[0].src = windySrc;
     }
 
     function loadNodeData() {
@@ -156,7 +404,7 @@
             updateNodeItem('co', data, [100, 1200], [200, 800], 'ppm', function (value) {
                 return Math.round(value);
             });
-            $('#node .time').text(timeFormatted(time));
+            $nodeTime.text(timeFormatted(time));
         });
     }
 
@@ -179,8 +427,10 @@
         btn.find('.badge').text((formatter ? formatter(value) : value) + units);
     }
 
-    function timeFormatted(time) {
-        return ('0' + time.getHours()).slice(-2) + ':' + ('0' + time.getMinutes()).slice(-2)
+    function timeFormatted(time, seconds) {
+        return ('0' + time.getHours()).slice(-2)
+            + ':' + ('0' + time.getMinutes()).slice(-2)
+            + (seconds ? ':' + ('0' + time.getSeconds()).slice(-2) : '');
     }
 
     function interpolateLinear (value, fromRange, toRange) {
@@ -206,7 +456,7 @@
         }
         throw new Error("Value out of range");
     }
-
+})();
 </script>
 </body>
 </html>
