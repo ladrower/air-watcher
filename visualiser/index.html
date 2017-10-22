@@ -352,8 +352,10 @@
                 $windy.hide();
                 $controls.removeClass('windy');
                 if (aqicnMapObsolete) {
-                    loadAqicnMapData();
-                    aqicnMapObsolete = false;
+                    setTimeout(function () {
+                        loadAqicnMapData();
+                        aqicnMapObsolete = false;
+                    });
                 } else {
                     adjustAqicnMapFrame();
                 }
