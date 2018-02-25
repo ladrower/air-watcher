@@ -75,7 +75,7 @@ function send_notification ($to, $message, $valid = Timing::TEN_MINUTES) {
     try {
         $client = new Client(TWILIO_SID, TWILIO_TOKEN);
 
-        $client->messages->create(
+        $client->accounts(TWILIO_SID)->messages->create(
             $to,
             array(
                 'from' => FROM,
